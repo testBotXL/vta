@@ -1,44 +1,32 @@
 import 'dart:async';
-
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:location/location.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+void main() => runApp(MyApp());
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
-
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Flutter Demo',
+      title: 'Flutter Maps',
       theme: ThemeData(
-        primarySwatch: Colors.green,
+        primarySwatch: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Vehicle Tracking Automation'),
+      home: MyHomePage(title: 'Flutter Map Home Page'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key? key, required this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
+  MyHomePage({Key key, this.title}) : super(key: key);
   final String title;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  _MyHomePageState createState() => _MyHomePageState();
 }
 
 class _MyHomePageState extends State<MyHomePage> {
@@ -46,69 +34,99 @@ class _MyHomePageState extends State<MyHomePage> {
   Location _locationTracker = Location();
   Marker marker;
   Circle circle;
-  GoogleMapControler _controler;
-  int _counter = 5;
+  GoogleMapController _controller;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter = _counter + 5;
+  static final CameraPosition initialLocation = CameraPosition(
+    target: LatLng(37.42796133580664, -122.085749655962),
+    zoom: 14.4746,
+  );
+
+  Future<Uint8List> getMarker() async {
+    ByteData byteData =
+        await DefaultAssetBundle.of(context).load("assets/car_icon.png");
+    return byteData.buffer.asUint8List();
+  }
+
+  void updateMarkerAndCircle(LocationData newLocalData, Uint8List imageData) {
+    LatLng latlng = LatLng(newLocalData.latitude, newLocalData.longitude);
+    this.setState(() {
+      marker = Marker(
+          markerId: MarkerId("home"),
+          position: latlng,
+          rotation: newLocalData.heading,
+          draggable: false,
+          zIndex: 2,
+          flat: true,
+          anchor: Offset(0.5, 0.5),
+          icon: BitmapDescriptor.fromBytes(imageData));
+      circle = Circle(
+          circleId: CircleId("car"),
+          radius: newLocalData.accuracy,
+          zIndex: 1,
+          strokeColor: Colors.blue,
+          center: latlng,
+          fillColor: Colors.blue.withAlpha(70));
     });
+  }
+
+  void getCurrentLocation() async {
+    try {
+      Uint8List imageData = await getMarker();
+      var location = await _locationTracker.getLocation();
+
+      updateMarkerAndCircle(location, imageData);
+
+      if (_locationSubscription != null) {
+        _locationSubscription.cancel();
+      }
+
+      _locationSubscription =
+          _locationTracker.onLocationChanged().listen((newLocalData) {
+        if (_controller != null) {
+          _controller.animateCamera(CameraUpdate.newCameraPosition(
+              new CameraPosition(
+                  bearing: 192.8334901395799,
+                  target: LatLng(newLocalData.latitude, newLocalData.longitude),
+                  tilt: 0,
+                  zoom: 18.00)));
+          updateMarkerAndCircle(newLocalData, imageData);
+        }
+      });
+    } on PlatformException catch (e) {
+      if (e.code == 'PERMISSION_DENIED') {
+        debugPrint("Permission Denied");
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_locationSubscription != null) {
+      _locationSubscription.cancel();
+    }
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
+      body: GoogleMap(
+        mapType: MapType.hybrid,
+        initialCameraPosition: initialLocation,
+        markers: Set.of((marker != null) ? [marker] : []),
+        circles: Set.of((circle != null) ? [circle] : []),
+        onMapCreated: (GoogleMapController controller) {
+          _controller = controller;
+        },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.subdirectory_arrow_left),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+          child: Icon(Icons.location_searching),
+          onPressed: () {
+            getCurrentLocation();
+          }),
     );
   }
 }
